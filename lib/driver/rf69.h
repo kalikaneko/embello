@@ -3,25 +3,37 @@
 template< typename SPI >
 class RF69 {
 public:
-    void init (uint8_t id, uint8_t group, int freq);
+    void init (uint8_t id, uint8_t group, int freq, uint8_t sphere=0);
     void encrypt (const char* key);
     void txPower (uint8_t level);
     
     int receive (void* ptr, int len);
-    void send (uint8_t header, const void* ptr, int len);
+    void send (uint8_t address, const void* ptr, int len);
     void sleep ();
     
+    uint32_t  frf;
     int16_t afc;
     uint8_t rssi;
     uint8_t lna;
+    int16_t fei;
+    uint8_t currentThreshold;
+    uint8_t flags;
+    uint8_t goodStep;
+    uint8_t badStep;
+    uint8_t lowThreshold;
+    uint8_t highThreshold;
     uint8_t myId;
-    uint8_t parity;
+    uint8_t myGroup;
+    uint8_t mySphere;
+    uint8_t powerValuesTX;
+    uint8_t powerValuesRX;
 
 protected:
     enum {
         REG_FIFO          = 0x00,
         REG_OPMODE        = 0x01,
         REG_FRFMSB        = 0x07,
+        REG_OSC1          = 0x0A,
         REG_PALEVEL       = 0x11,
         REG_LNAVALUE      = 0x18,
         REG_AFCMSB        = 0x1F,
@@ -31,16 +43,31 @@ protected:
         REG_RSSIVALUE     = 0x24,
         REG_IRQFLAGS1     = 0x27,
         REG_IRQFLAGS2     = 0x28,
+        REG_RSSITHRESHOLD = 0x29,
         REG_SYNCVALUE1    = 0x2F,
         REG_SYNCVALUE2    = 0x30,
+        REG_PACKETCONFIG1 = 0x37,
+        REG_PAYLOADLENGTH = 0x38,
         REG_NODEADDR      = 0x39,
         REG_BCASTADDR     = 0x3A,
+        REG_FIFOTHRESH    = 0x3C,
         REG_PKTCONFIG2    = 0x3D,
         REG_AESKEYMSB     = 0x3E,
 
         MODE_SLEEP        = 0<<2,
+        MODE_STDBY        = 1<<2,
         MODE_TRANSMIT     = 3<<2,
         MODE_RECEIVE      = 4<<2,
+
+        START_TX          = 0xC2,
+        STOP_TX           = 0x42,
+
+        RCCALSTART        = 0x80,
+        RCCALDONE         = 0x40,
+        
+        MASTER            = 0x80,
+        NOISEY            = 0x40,
+        WAITPAYLOAD       = 0x20,
 
         IRQ1_MODEREADY    = 1<<7,
         IRQ1_RXREADY      = 1<<6,
@@ -87,7 +114,7 @@ void RF69<SPI>::setFrequency (uint32_t hz) {
     // due to this, the lower 6 bits of the calculated factor will always be 0
     // this is still 4 ppm, i.e. well below the radio's 32 MHz crystal accuracy
     // 868.0 MHz = 0xD90000, 868.3 MHz = 0xD91300, 915.0 MHz = 0xE4C000  
-    uint32_t frf = (hz << 2) / (32000000L >> 11);
+    frf = (hz << 2) / (32000000L >> 11);
     writeReg(REG_FRFMSB, frf >> 10);
     writeReg(REG_FRFMSB+1, frf >> 2);
     writeReg(REG_FRFMSB+2, frf << 6);
@@ -111,48 +138,84 @@ static const uint8_t configRegs [] = {
     0x04, 0x8A, // BitRateLsb, divider = 32 MHz / 650
     0x05, 0x02, // FdevMsb = 45 KHz
     0x06, 0xE1, // FdevLsb = 45 KHz
-    0x0B, 0x20, // Low M
+    0x0B, 0x20, // AfcLowBetaOn
     0x19, 0x4A, // RxBw 100 KHz
     0x1A, 0x42, // AfcBw 125 KHz
     0x1E, 0x0C, // AfcAutoclearOn, AfcAutoOn
     //0x25, 0x40, //0x80, // DioMapping1 = SyncAddress (Rx)
-    0x29, 0xA0, // RssiThresh -80 dB
+    0x29, 0xC2, //0xFF, // RssiThresh - 127.5dB
     0x2D, 0x05, // PreambleSize = 5
     0x2E, 0x88, // SyncConfig = sync on, sync size = 2
     0x2F, 0x2D, // SyncValue1 = 0x2D
-    0x37, 0xD4, // PacketConfig1 = fixed, white, filt node + bcast
-    0x38, 0x42, // PayloadLength = 0, unlimited
-    0x3C, 0x8F, // FifoTresh, not empty, level 15
-    0x3D, 0x12, // 0x10, // PacketConfig2, interpkt = 1, autorxrestart off
+    0x37, 0xD4, // 0b1101 010X PacketConfig1 = varable, white, crc, filt node or bcast
+//    0x37, 0xD0, // 0b1101 010X PacketConfig1 = varable, white, crc, NOfilt node or bcast
+    0x38, 0x42, // PayloadLength on RX is 66 bytes
+//    0x39, 0x00, // Node address
+    0x3A, 0xFF, // Broadcast Address
+    0x3C, 0xC2, // 0b1 1000010 TX FifoTresh
+    0x3D, 0x12, // 0b0001 0010 0x10, // PacketConfig2, interpkt = 1, autorxrestart off
     0x6F, 0x20, // TestDagc ...
-    0x71, 0x02, // RegTestAfc
+    0x71, 0x02, // RegTecstAfc
     0
 };
 
+// My approach to the address byte (FIFO + 1):
+//  Same approach to group as RFM12B - group number is used as hardware 
+//  sync character if this becomes corrupted in flight then packet will not
+//  be seen. The option of group = 0 could be considered if sync pattern
+//  was revised.
+//  The address byte supported by the RFM69 hardware has I consider a number of
+//  uses other than duplicating the group sync pattern character. Since it is
+//  inside the CRC its integrity is assured.
+//  Devices having a community of interest could share a sphere of influence 
+//  address always addressing packets to a designated broadcast address which 
+//  they would all receive. Replies could be directed to specific nodes within 
+//  the spere. Nodes outside the sphere would not receive these packets due to
+//  hardware filtering, provided the node numbers were not duplicated.
+//  Central nodes could receive all packets by switching off packet 
+//  filtering. The number of spheres's is limited by the need to address
+//  individual nodes directly, and by only 256 unique addresses being supported
+//  by the hardware.
 template< typename SPI >
-void RF69<SPI>::init (uint8_t id, uint8_t group, int freq) {
+void RF69<SPI>::init (uint8_t id, uint8_t group, int freq, uint8_t sphere) {
     myId = id;
-
-    // b7 = group b7^b5^b3^b1, b6 = group b6^b4^b2^b0
-    parity = group ^ (group << 4);
-    parity = (parity ^ (parity << 2)) & 0xC0;
-
+    myGroup = group;
+    mySphere = sphere;
     // 10 MHz, i.e. 30 MHz / 3 (or 4 MHz if clock is still at 12 MHz)
     spi.master(3);
+
     do
         writeReg(REG_SYNCVALUE1, 0xAA);
     while (readReg(REG_SYNCVALUE1) != 0xAA);
-    do
-        writeReg(REG_SYNCVALUE1, 0x55);
-    while (readReg(REG_SYNCVALUE1) != 0x55);
+//    do
+//        writeReg(REG_SYNCVALUE1, 0x55);
+//    while (readReg(REG_SYNCVALUE1) != 0x55);
 
+    currentThreshold = readReg(REG_RSSITHRESHOLD);
+    flags &= ~WAITPAYLOAD;
+    goodStep = 8;
+    badStep = 3;// Initial value to reduce sensitivty (lift the RSSI Threshold)
+    highThreshold = 0;
+    lowThreshold = 255;    
     configure(configRegs);
-    configure(configRegs); // ???
     setFrequency(freq);
 
     writeReg(REG_SYNCVALUE2, group);
-    writeReg(REG_NODEADDR, myId | parity);
-    writeReg(REG_BCASTADDR, parity);
+    writeReg(REG_NODEADDR, myId);
+    writeReg(REG_BCASTADDR, mySphere);
+    
+    setMode(MODE_STDBY);
+    writeReg(REG_OSC1, RCCALSTART);
+    while (!(readReg(REG_OSC1) & RCCALDONE))
+        ;
+    setMode(MODE_SLEEP); 
+    powerValuesTX = readReg(REG_PALEVEL);
+    flags |= NOISEY;
+// Debug code
+    if (myId == 12) {
+        flags |= MASTER;
+    }
+// End Debug   
 }
 
 template< typename SPI >
@@ -171,7 +234,8 @@ void RF69<SPI>::encrypt (const char* key) {
 
 template< typename SPI >
 void RF69<SPI>::txPower (uint8_t level) {
-    writeReg(REG_PALEVEL, (readReg(REG_PALEVEL) & ~0x1F) | level);
+    powerValuesTX = readReg(REG_PALEVEL);
+    writeReg(REG_PALEVEL, (powerValuesTX & ~0x1F) | level);// Don't change PA0-2
 }
 
 template< typename SPI >
@@ -181,28 +245,67 @@ void RF69<SPI>::sleep () {
 
 template< typename SPI >
 int RF69<SPI>::receive (void* ptr, int len) {
+
+    currentThreshold = readReg(REG_RSSITHRESHOLD);  // in case it is has changed
+
     switch (mode) {
     case MODE_RECEIVE: {
         static uint8_t lastFlag;
         if ((readReg(REG_IRQFLAGS1) & IRQ1_RXREADY) != lastFlag) {
             lastFlag ^= IRQ1_RXREADY;
             if (lastFlag) { // flag just went from 0 to 1
-                rssi = readReg(REG_RSSIVALUE);
-                lna = (readReg(REG_LNAVALUE) >> 3) & 0x7;
+                rssi = readReg(REG_RSSIVALUE);  // Timing critical
+
 #if RF69_SPI_BULK
                 spi.enable();
+                spi.transfer(REG_FEIMSB);
+                fei = spi.transfer(0) << 8;     // Timing critical
+                fei |= spi.transfer(0);
                 spi.transfer(REG_AFCMSB);
                 afc = spi.transfer(0) << 8;
-                afc |= spi.transfer(0) << 8;
+                afc |= spi.transfer(0);
                 spi.disable();
 #else
+                fei = readReg(REG_FEIMSB) << 8; // Timing critical
+                fei |= readReg(REG_FEILSB);     // Timing critical
                 afc = readReg(REG_AFCMSB) << 8;
                 afc |= readReg(REG_AFCLSB);
+
 #endif
+                lna = (readReg(REG_LNAVALUE) >> 3) & 0x7;
+
+                // This section reduces the radio sensitivity
+                // if afc is way off and payload didn't happen
+                // after the previous IRQ1_RXREADY 
+                if ((afc & 0x7F80) && (flags & WAITPAYLOAD)) {
+                    currentThreshold-= badStep;
+                    if (currentThreshold < 80) currentThreshold = 80;
+                    writeReg(REG_RSSITHRESHOLD, currentThreshold);
+                    goodStep = 4; //8;   // Count for next uplift
+                    flags |= NOISEY;   
+                }                      // in sensitivity 
+                flags |= WAITPAYLOAD;  // IRQ2_PAYLOADREADY expected next
+
+
             }
         }
 
         if (readReg(REG_IRQFLAGS2) & IRQ2_PAYLOADREADY) {
+            goodStep--;          // Countdown to an increase in sensitivity
+            if (!goodStep) {
+                badStep = 1;       // Coarse tuning completed
+                flags &= ~NOISEY;
+
+                if (currentThreshold > highThreshold) 
+                  highThreshold = currentThreshold; // Store bounds of
+                if (currentThreshold < lowThreshold)
+                  lowThreshold = currentThreshold;  // relative stability 
+                if (!currentThreshold++) currentThreshold = 255;
+                goodStep = 4; //255;  // Wait a long time before another increase 
+                writeReg(REG_RSSITHRESHOLD, currentThreshold);    
+            }
+            flags  &= ~WAITPAYLOAD;
+
             
 #if RF69_SPI_BULK
             spi.enable();
@@ -223,6 +326,31 @@ int RF69<SPI>::receive (void* ptr, int len) {
             }
 #endif
 
+// Development Debug of frequency tracking
+            
+            if (!(flags & NOISEY) && !(flags & MASTER) && ((afc & 0xFFE0))){
+            
+                if  (afc < 0) {  // Test sign of AFC error
+                    frf--;
+                }    
+                else {
+                    frf++;
+                }
+                
+                writeReg(REG_FRFMSB, frf >> 10);
+                writeReg(REG_FRFMSB+1, frf >> 2);
+                writeReg(REG_FRFMSB+2, frf << 6);
+
+                setMode(MODE_STDBY);
+                writeReg(REG_OSC1, RCCALSTART);
+                while (!(readReg(REG_OSC1) & RCCALDONE))
+                    ;
+                setMode(MODE_RECEIVE); 
+ 
+            }
+// End Debug
+
+
             return count;
         }
         break;
@@ -236,25 +364,38 @@ int RF69<SPI>::receive (void* ptr, int len) {
 }
 
 template< typename SPI >
-void RF69<SPI>::send (uint8_t header, const void* ptr, int len) {
+void RF69<SPI>::send (uint8_t address, const void* ptr, int len) {
     // while the mode is MODE_TRANSMIT, receive polling will not interfere
     setMode(MODE_TRANSMIT);
 
 #if RF69_SPI_BULK
     spi.enable();
     spi.transfer(REG_FIFO | 0x80);
-    spi.transfer(len + 2);
-    spi.transfer((header & 0x3F) | parity);
-    spi.transfer((header & 0xC0) | myId);
+    spi.transfer(len + 4);
+    spi.transfer(address);
+    spi.transfer(myId);
+    spi.transfer(powerValuesTX);
+    spi.transfer(currentThreshold);
+    spi.transfer(rssi);
+    powerValuesRX = ((powerValuesRX & 0xF8) | lna);   
+    spi.transfer(powerValuesRX);
+    
     for (int i = 0; i < len; ++i)
         spi.transfer(((const uint8_t*) ptr)[i]);
     spi.disable();
 #else
-    writeReg(REG_FIFO, len + 2);
-    writeReg(REG_FIFO, (header & 0x3F) | parity);
-    writeReg(REG_FIFO, (header & 0xC0) | myId);
+    writeReg(REG_FIFOTHRESH, STOP_TX);  // Wait for FIFO to be filled
+    writeReg(REG_FIFO, len + 6);
+    writeReg(REG_FIFO, address);
+    writeReg(REG_FIFO, myId);
+    writeReg(REG_FIFO, powerValuesTX);
+    writeReg(REG_FIFO, currentThreshold);
+    writeReg(REG_FIFO, rssi);
+    powerValuesRX = ((powerValuesRX & 0xF8) | lna);   
+    writeReg(REG_FIFO, powerValuesRX);
     for (int i = 0; i < len; ++i)
         writeReg(REG_FIFO, ((const uint8_t*) ptr)[i]);
+    writeReg(REG_FIFOTHRESH, START_TX); // Release FIFO for transmission
 #endif
 
     while ((readReg(REG_IRQFLAGS2) & IRQ2_PACKETSENT) == 0)

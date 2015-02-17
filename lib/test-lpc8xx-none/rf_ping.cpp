@@ -13,13 +13,15 @@
 RF69<SpiDev0> rf;
 
 uint8_t rxBuf[66];
+uint8_t targetAddr;
 
 int main () {
+    targetAddr = 1;
     // the device pin mapping is configured at run time based on its id
     uint16_t devId = LPC_SYSCON->DEVICE_ID;
     // choose different node id's, depending on the chip type
     uint8_t nodeId = 60;
-
+    uint8_t mySphere = 1;
     // SPI pin assignment:
     //  3: SPI0_SCK x         x         x        
     //  4: x        SPI0_SSEL SPI0_MISO SPI0_MOSI
@@ -81,27 +83,47 @@ int main () {
     for (int i = 0; i < 10000; ++i) __ASM("");
     printf("\n[rf_ping] dev %x node %d\n", devId, nodeId);
 
-    rf.init(nodeId, 42, 8683);
-    //rf.encrypt("mysecret");
-    rf.txPower(0); // 0 = min .. 31 = max
+    rf.init(nodeId, 42, 8683, mySphere);
+    rf.encrypt("mysecret");
+    rf.txPower(31); // 0 = min .. 31 = max
+    
+    printf("\n[rf_ping] MyID %d, Group %d, Sphere %d\n", 
+      rf.myId, rf.myGroup, rf.mySphere);
+    
 
-    uint16_t seq = 0, cnt = 0;
+    uint16_t cnt = 0, sweep = 31;
 
     while (true) {
         if (++cnt == 0) {
-            const int TXLEN = 1; // can be set to anything from 1 to 65
+            const int TXLEN = 16; // can be set to anything from 1 to 65
             static uint8_t txBuf[TXLEN];
+            for (int i = 1; i < TXLEN; ++i) txBuf[i] = (i + 0x40);
             printf(" > %d\n", ++txBuf[0]);
-            rf.send(0, txBuf, sizeof txBuf);
+            rf.send(targetAddr, txBuf, sizeof txBuf);
         }
 
         int len = rf.receive(rxBuf, sizeof rxBuf);
         if (len >= 0) {
-            printf("OK ");
-            for (int i = 0; i < len; ++i)
+            printf("OK(%d) To:%d Fr:%d ", 
+              len, rxBuf[0], rxBuf[1]);
+              
+            for (int i = 6; i < len; ++i)
                 printf("%02x", rxBuf[i]);
-            printf(" (%d%s%d:%d)\n",
-                    rf.rssi, rf.afc < 0 ? "" : "+", rf.afc, rf.lna);
+                
+            uint8_t powerValuesTX = rxBuf[2];
+            uint8_t currentThreshold = rxBuf[3];
+            uint8_t rssi = rxBuf[4];
+            uint8_t lna = rxBuf[5];
+            
+//            targetAddr = rxBuf[1];  // DEBUG locks conversation to first node seen.
+            
+            uint16_t f = (uint8_t) rf.frf;  // radio frequency LSB
+            printf(" (%d%s%d:%d) Rem=%02x:%02x:%02x:%02x Thr=%d:%d:%d(%d) F:%d frf:%d\n",
+                    rf.rssi, rf.afc < 0 ? "" : "+", rf.afc, rf.lna,
+                      powerValuesTX, currentThreshold, rssi, lna,
+                        rf.lowThreshold, rf.currentThreshold, rf.highThreshold, 
+                          rf.goodStep, rf.fei, f);
+            rf.txPower((--sweep) & 0x1F); // 0 = min .. 31 = max
         }
 
         chThdYield() 
