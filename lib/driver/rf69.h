@@ -27,6 +27,9 @@ public:
     uint8_t mySphere;
     uint8_t powerValuesTX;
     uint8_t powerValuesRX;
+    int16_t appAverage;
+    int16_t lowestAfc;
+    int16_t highestAfc;
 
 protected:
     enum {
@@ -196,7 +199,11 @@ void RF69<SPI>::init (uint8_t id, uint8_t group, int freq, uint8_t sphere) {
     goodStep = 8;
     badStep = 3;// Initial value to reduce sensitivty (lift the RSSI Threshold)
     highThreshold = 0;
-    lowThreshold = 255;    
+    lowThreshold = ~0;
+    
+    lowestAfc = 32767;
+    highestAfc = -32768;
+        
     configure(configRegs);
     setFrequency(freq);
 
@@ -274,6 +281,9 @@ int RF69<SPI>::receive (void* ptr, int len) {
 #endif
                 lna = (readReg(REG_LNAVALUE) >> 3) & 0x7;
 
+// TODO A scallywag could cause our sensitivity to be backed right off by
+//      just broadcasting carrier. Perhaps this code wait until some packet
+//      source verification.
                 // This section reduces the radio sensitivity
                 // if afc is way off and payload didn't happen
                 // after the previous IRQ1_RXREADY 
@@ -282,15 +292,28 @@ int RF69<SPI>::receive (void* ptr, int len) {
                     if (currentThreshold < 80) currentThreshold = 80;
                     writeReg(REG_RSSITHRESHOLD, currentThreshold);
                     goodStep = 4; //8;   // Count for next uplift
-                    flags |= NOISEY;   
-                }                      // in sensitivity 
+                    flags |= NOISEY;     // in sensitivity
+                }
                 flags |= WAITPAYLOAD;  // IRQ2_PAYLOADREADY expected next
 
 
             }
         }
+// The criteria for an incoming packet have been met but it may just be noise.
+//        int count;
+//        while ((readReg(REG_IRQFLAGS2) & IRQ2_FIFONOTEMPTY) != IRQ2_FIFONOTEMPTY)
+//            ;
+//        count = readReg(REG_FIFO);
+
+
+
+
+
 
         if (readReg(REG_IRQFLAGS2) & IRQ2_PAYLOADREADY) {
+        //  aes can't verify the packet isn't from a scallywag, our node could
+        //  be lured away by gradually changing the frequency which we would
+        //  track.
             goodStep--;          // Countdown to an increase in sensitivity
             if (!goodStep) {
                 badStep = 1;       // Coarse tuning completed
@@ -302,7 +325,7 @@ int RF69<SPI>::receive (void* ptr, int len) {
                   lowThreshold = currentThreshold;  // relative stability 
                 if (!currentThreshold++) currentThreshold = 255;
                 goodStep = 4; //255;  // Wait a long time before another increase 
-                writeReg(REG_RSSITHRESHOLD, currentThreshold);    
+                writeReg(REG_RSSITHRESHOLD, currentThreshold);
             }
             flags  &= ~WAITPAYLOAD;
 
@@ -349,6 +372,12 @@ int RF69<SPI>::receive (void* ptr, int len) {
  
             }
 // End Debug
+                       
+            appAverage -= appAverage >> 3;  // Eight samples
+            appAverage += afc >> 3;         //
+            
+            if(afc < lowestAfc) lowestAfc = afc;
+            if(afc > highestAfc) highestAfc = afc;    
 
 
             return count;
