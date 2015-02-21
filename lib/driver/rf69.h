@@ -30,6 +30,7 @@ public:
     int16_t appAverage;
     int16_t lowestAfc;
     int16_t highestAfc;
+    uint8_t beforeTX;
 
 protected:
     enum {
@@ -74,6 +75,8 @@ protected:
 
         IRQ1_MODEREADY    = 1<<7,
         IRQ1_RXREADY      = 1<<6,
+        IRQ1_PLLLOCK      = 1<<4,
+        IRQ1_RSSI         = 1<<3,
         IRQ1_SYNADDRMATCH = 1<<0,
 
         IRQ2_FIFONOTEMPTY = 1<<6,
@@ -394,41 +397,46 @@ int RF69<SPI>::receive (void* ptr, int len) {
 
 template< typename SPI >
 void RF69<SPI>::send (uint8_t address, const void* ptr, int len) {
+
+    beforeTX = readReg(REG_IRQFLAGS1);
+    if (!(beforeTX & (IRQ1_RXREADY + IRQ1_RSSI))) { // Skip TX if receiving
+
     // while the mode is MODE_TRANSMIT, receive polling will not interfere
-    setMode(MODE_TRANSMIT);
+        setMode(MODE_TRANSMIT);
 
 #if RF69_SPI_BULK
-    spi.enable();
-    spi.transfer(REG_FIFO | 0x80);
-    spi.transfer(len + 4);
-    spi.transfer(address);
-    spi.transfer(myId);
-    spi.transfer(powerValuesTX);
-    spi.transfer(currentThreshold);
-    spi.transfer(rssi);
-    powerValuesRX = ((powerValuesRX & 0xF8) | lna);   
-    spi.transfer(powerValuesRX);
+        spi.enable();
+        spi.transfer(REG_FIFO | 0x80);
+        spi.transfer(len + 4);
+        spi.transfer(address);
+        spi.transfer(myId);
+        spi.transfer(powerValuesTX);
+        spi.transfer(currentThreshold);
+        spi.transfer(rssi);
+        powerValuesRX = ((powerValuesRX & 0xF8) | lna);   
+        spi.transfer(powerValuesRX);
     
-    for (int i = 0; i < len; ++i)
-        spi.transfer(((const uint8_t*) ptr)[i]);
-    spi.disable();
+        for (int i = 0; i < len; ++i)
+            spi.transfer(((const uint8_t*) ptr)[i]);
+        spi.disable();
 #else
-    writeReg(REG_FIFOTHRESH, STOP_TX);  // Wait for FIFO to be filled
-    writeReg(REG_FIFO, len + 6);
-    writeReg(REG_FIFO, address);
-    writeReg(REG_FIFO, myId);
-    writeReg(REG_FIFO, powerValuesTX);
-    writeReg(REG_FIFO, currentThreshold);
-    writeReg(REG_FIFO, rssi);
-    powerValuesRX = ((powerValuesRX & 0xF8) | lna);   
-    writeReg(REG_FIFO, powerValuesRX);
-    for (int i = 0; i < len; ++i)
-        writeReg(REG_FIFO, ((const uint8_t*) ptr)[i]);
-    writeReg(REG_FIFOTHRESH, START_TX); // Release FIFO for transmission
+        writeReg(REG_FIFOTHRESH, STOP_TX);  // Wait for FIFO to be filled
+        writeReg(REG_FIFO, len + 6);
+        writeReg(REG_FIFO, address);
+        writeReg(REG_FIFO, myId);
+        writeReg(REG_FIFO, powerValuesTX);
+        writeReg(REG_FIFO, currentThreshold);
+        writeReg(REG_FIFO, rssi);
+        powerValuesRX = ((powerValuesRX & 0xF8) | lna);   
+        writeReg(REG_FIFO, powerValuesRX);
+        for (int i = 0; i < len; ++i)
+            writeReg(REG_FIFO, ((const uint8_t*) ptr)[i]);
+        writeReg(REG_FIFOTHRESH, START_TX); // Release FIFO for transmission
 #endif
 
-    while ((readReg(REG_IRQFLAGS2) & IRQ2_PACKETSENT) == 0)
-        chThdYield();
+        while ((readReg(REG_IRQFLAGS2) & IRQ2_PACKETSENT) == 0)
+            chThdYield();
 
-    setMode(MODE_RECEIVE);
+        setMode(MODE_RECEIVE);
+    }
 }

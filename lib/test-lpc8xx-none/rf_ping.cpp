@@ -118,12 +118,12 @@ int main () {
 //            targetAddr = rxBuf[1];  // DEBUG locks conversation to first node seen.
             
             uint16_t f = (uint8_t) rf.frf;  // radio frequency LSB
-            printf(" (%d%s%d:%d) Rem=%02x:%02x:%02x:%02x Thr=%d:%d:%d(%d) F:%d frf:%d [%d:%d:%d]\n",
+            printf(" (%d%s%d:%d) Rem=%02x:%02x:%02x:%02x Thr=%d:%d:%d(%d) F:%d frf:%d [%d:%d:%d] TX:%d\n",
                     rf.rssi, rf.afc < 0 ? "" : "+", rf.afc, rf.lna,
                       powerValuesTX, currentThreshold, rssi, lna,
                         rf.lowThreshold, rf.currentThreshold, rf.highThreshold, 
                           rf.goodStep, rf.fei, f, rf.lowestAfc, rf.appAverage,
-                            rf.highestAfc);
+                            rf.highestAfc, rf.beforeTX);
             rf.txPower((--sweep) & 0x1F); // 0 = min .. 31 = max
         }
 
