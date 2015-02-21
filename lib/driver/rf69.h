@@ -290,12 +290,22 @@ int RF69<SPI>::receive (void* ptr, int len) {
                 // This section reduces the radio sensitivity
                 // if afc is way off and payload didn't happen
                 // after the previous IRQ1_RXREADY 
-                if ((afc & 0x7F80) && (flags & WAITPAYLOAD)) {
+                if ((afc & 0xFF80) && (flags & WAITPAYLOAD)) {
                     currentThreshold-= badStep;
                     if (currentThreshold < 80) currentThreshold = 80;
                     writeReg(REG_RSSITHRESHOLD, currentThreshold);
                     goodStep = 4; //8;   // Count for next uplift
                     flags |= NOISEY;     // in sensitivity
+                } else {
+                    if(!(flags & NOISEY)) {
+                                       
+                        appAverage -= appAverage >> 3;  // Eight samples
+                        appAverage += afc >> 3;         //
+            
+                        if(afc < lowestAfc) lowestAfc = afc;
+                        if(afc > highestAfc) highestAfc = afc;
+                    }   
+                
                 }
                 flags |= WAITPAYLOAD;  // IRQ2_PAYLOADREADY expected next
 
@@ -354,7 +364,7 @@ int RF69<SPI>::receive (void* ptr, int len) {
 
 // Development Debug of frequency tracking
             
-            if (!(flags & NOISEY) && !(flags & MASTER) && ((afc & 0xFFE0))){
+            if (!(flags & (NOISEY + MASTER)) && ((afc < 62 && afc > 0) | (afc > -62 && afc < 0))){
             
                 if  (afc < 0) {  // Test sign of AFC error
                     frf--;
@@ -375,13 +385,6 @@ int RF69<SPI>::receive (void* ptr, int len) {
  
             }
 // End Debug
-                       
-            appAverage -= appAverage >> 3;  // Eight samples
-            appAverage += afc >> 3;         //
-            
-            if(afc < lowestAfc) lowestAfc = afc;
-            if(afc > highestAfc) highestAfc = afc;    
-
 
             return count;
         }
