@@ -270,7 +270,7 @@ int RF69<SPI>::receive (void* ptr, int len) {
                 spi.enable();
                 spi.transfer(REG_FEIMSB);
                 fei = spi.transfer(0) << 8;     // Timing critical
-                fei |= spi.transfer(0);
+                fei |= spi.transfer(0);         // Timing critical
                 spi.transfer(REG_AFCMSB);
                 afc = spi.transfer(0) << 8;
                 afc |= spi.transfer(0);
@@ -285,17 +285,19 @@ int RF69<SPI>::receive (void* ptr, int len) {
                 lna = (readReg(REG_LNAVALUE) >> 3) & 0x7;
 
 // TODO A scallywag could cause our sensitivity to be backed right off by
-//      just broadcasting carrier. Perhaps this code wait until some packet
-//      source verification.
+//      just broadcasting carrier. Perhaps this shoule code wait until some 
+//      packet source authentication.
                 // This section reduces the radio sensitivity
                 // if afc is way off and payload didn't happen
                 // after the previous IRQ1_RXREADY 
-                if ((afc & 0xFF80) && (flags & WAITPAYLOAD)) {
+                if ((((afc > 62) || (afc < -62))
+                  && (lna == 1))
+                  || (flags & WAITPAYLOAD)) {
                     currentThreshold-= badStep;
-                    if (currentThreshold < 80) currentThreshold = 80;
+                    if (currentThreshold < 80) currentThreshold = 160;
                     writeReg(REG_RSSITHRESHOLD, currentThreshold);
-                    goodStep = 4; //8;   // Count for next uplift
-                    flags |= NOISEY;     // in sensitivity
+                    goodStep = 8;         // Count for next uplift
+                    flags |= NOISEY;      // in sensitivity
                 } else {
                     if(!(flags & NOISEY)) {
                                        
@@ -364,8 +366,8 @@ int RF69<SPI>::receive (void* ptr, int len) {
 
 // Development Debug of frequency tracking
             
-            if (!(flags & (NOISEY + MASTER)) && ((afc < 62 && afc > 0) | (afc > -62 && afc < 0))){
-            
+            if (!(flags & (NOISEY + MASTER)) 
+              && ((afc < 62 && afc > 0) || (afc > -62 && afc < 0))){            
                 if  (afc < 0) {  // Test sign of AFC error
                     frf--;
                 }    
@@ -401,8 +403,10 @@ int RF69<SPI>::receive (void* ptr, int len) {
 template< typename SPI >
 void RF69<SPI>::send (uint8_t address, const void* ptr, int len) {
 
-    if ((beforeTX = readReg(REG_IRQFLAGS1)) & (IRQ1_RXREADY + IRQ1_RSSI))
-        return;   // Lost TX packet!
+    if ((beforeTX = readReg(REG_IRQFLAGS1)) & (IRQ1_RXREADY + IRQ1_RSSI)) {
+//        delay(500);
+        return;   // Loose TX packet!
+    }
 // Can't delay loop because RX isn't interrupt driven.
 
     // while the mode is MODE_TRANSMIT, receive polling will not interfere
