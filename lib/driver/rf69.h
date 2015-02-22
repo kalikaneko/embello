@@ -10,6 +10,7 @@ public:
     int receive (void* ptr, int len);
     void send (uint8_t address, const void* ptr, int len);
     void sleep ();
+    void setCalibrate ();
     
     uint32_t  frf;
     int16_t afc;
@@ -127,6 +128,20 @@ void RF69<SPI>::setFrequency (uint32_t hz) {
 }
 
 template< typename SPI >
+void RF69<SPI>::setCalibrate () {
+
+    writeReg(REG_FRFMSB, frf >> 10);
+    writeReg(REG_FRFMSB+1, frf >> 2);
+    writeReg(REG_FRFMSB+2, frf << 6);
+    setMode(MODE_STDBY);
+    writeReg(REG_OSC1, RCCALSTART);
+    while (!(readReg(REG_OSC1) & RCCALDONE))
+        ;
+    setMode(MODE_RECEIVE);
+}
+
+
+template< typename SPI >
 void RF69<SPI>::configure (const uint8_t* p) {
     while (true) {
         uint8_t cmd = p[0];
@@ -144,7 +159,7 @@ static const uint8_t configRegs [] = {
     0x04, 0x8A, // BitRateLsb, divider = 32 MHz / 650
     0x05, 0x02, // FdevMsb = 45 KHz
     0x06, 0xE1, // FdevLsb = 45 KHz
-    0x0B, 0x20, // AfcLowBetaOn
+    0x0B, 0x00, //0x20, // AfcLowBetaOn
     0x19, 0x4A, // RxBw 100 KHz
     0x1A, 0x42, // AfcBw 125 KHz
     0x1E, 0x0C, // AfcAutoclearOn, AfcAutoOn
@@ -160,8 +175,8 @@ static const uint8_t configRegs [] = {
     0x3A, 0xFF, // Broadcast Address
     0x3C, 0xC2, // 0b1 1000010 TX FifoTresh
     0x3D, 0x12, // 0b0001 0010 0x10, // PacketConfig2, interpkt = 1, autorxrestart off
-    0x6F, 0x20, // TestDagc ...
-    0x71, 0x02, // RegTecstAfc
+    0x6F, 0x30, //20, // TestDagc ...
+    0x71, 0x00, //02, // RegTecstAfc
     0
 };
 
@@ -298,16 +313,6 @@ int RF69<SPI>::receive (void* ptr, int len) {
                     writeReg(REG_RSSITHRESHOLD, currentThreshold);
                     goodStep = 8;         // Count for next uplift
                     flags |= NOISEY;      // in sensitivity
-                } else {
-                    if(!(flags & NOISEY)) {
-                                       
-                        appAverage -= appAverage >> 3;  // Eight samples
-                        appAverage += afc >> 3;         //
-            
-                        if(afc < lowestAfc) lowestAfc = afc;
-                        if(afc > highestAfc) highestAfc = afc;
-                    }   
-                
                 }
                 flags |= WAITPAYLOAD;  // IRQ2_PAYLOADREADY expected next
 
@@ -366,25 +371,26 @@ int RF69<SPI>::receive (void* ptr, int len) {
 
 // Development Debug of frequency tracking
             
-            if (!(flags & (NOISEY + MASTER)) 
-              && ((afc < 62 && afc > 0) || (afc > -62 && afc < 0))){            
-                if  (afc < 0) {  // Test sign of AFC error
-                    frf--;
-                }    
-                else {
-                    frf++;
+            if (!(flags & (NOISEY)) 
+              && ((afc < 122 && afc > 0) || (afc > -122 && afc < 0))) { 
+
+                appAverage -= appAverage >> 4;  // Sixteen samples
+                appAverage += afc >> 4;         //
+                
+                if (!(flags & MASTER)) {        
+                    if (afc < -61) {  // Test sign of average AFC error
+                        frf--;
+                        setCalibrate();
+                    } else {
+                        if (afc > 61) {
+                            frf++;
+                            setCalibrate();
+                        }
+                    }                
                 }
                 
-                writeReg(REG_FRFMSB, frf >> 10);
-                writeReg(REG_FRFMSB+1, frf >> 2);
-                writeReg(REG_FRFMSB+2, frf << 6);
-
-                setMode(MODE_STDBY);
-                writeReg(REG_OSC1, RCCALSTART);
-                while (!(readReg(REG_OSC1) & RCCALDONE))
-                    ;
-                setMode(MODE_RECEIVE); 
- 
+            if(appAverage < lowestAfc) lowestAfc = appAverage;
+            if(appAverage > highestAfc) highestAfc = appAverage;                                
             }
 // End Debug
 
