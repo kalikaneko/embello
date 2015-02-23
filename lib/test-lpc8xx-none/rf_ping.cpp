@@ -14,6 +14,7 @@ RF69<SpiDev0> rf;
 
 uint8_t rxBuf[66];
 uint8_t targetAddr;
+uint8_t level;
 
 int main () {
     targetAddr = 1;
@@ -85,7 +86,8 @@ int main () {
 
     rf.init(nodeId, 42, 86827, mySphere);
 //    rf.encrypt("mysecret");
-    rf.txPower(8); // 0 = min .. 31 = max
+    level = 31;
+    rf.txPower(level); // 0 = min .. 31 = max
     
     printf("\n[rf_ping] MyID %d, Group %d, Sphere %d\n", 
       rf.myId, rf.myGroup, rf.mySphere);
@@ -98,7 +100,7 @@ int main () {
             const int TXLEN = 16; // can be set to anything from 1 to 65
             static uint8_t txBuf[TXLEN];
             for (int i = 1; i < TXLEN; ++i) txBuf[i] = (i + 0x40);
-            printf("%d> %d\n", (rf.powerValuesTX & 0x1F), ++txBuf[0]);
+            printf("%d>%d %d\n", (rf.powerValuesTX & 0x1F),rf.currentThreshold, ++txBuf[0]);
             rf.send(targetAddr, txBuf, sizeof txBuf);
         }
 
@@ -114,6 +116,12 @@ int main () {
             uint8_t currentThreshold = rxBuf[3];
             uint8_t rssi = rxBuf[4];
             uint8_t lna = rxBuf[5];
+// Adjust power levels based on reports from remote node            
+            if ((lna < 2)) {  // If remote node reports a low lna.
+                if (level < 31) rf.txPower(++level);
+            } else {
+                if (level > 0) rf.txPower(--level);
+            }  
             
 //            targetAddr = rxBuf[1];  // DEBUG locks conversation to first node seen.
             
@@ -125,6 +133,7 @@ int main () {
                           rf.goodStep, rf.fei, f, rf.lowestAfc, rf.appAverage,
                             rf.highestAfc, rf.beforeTX);
 //            rf.txPower((--sweep) & 0x1F); // 0 = min .. 31 = max
+
         }
 
         chThdYield() 

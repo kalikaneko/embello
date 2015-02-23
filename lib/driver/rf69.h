@@ -32,6 +32,14 @@ public:
     int16_t lowestAfc;
     int16_t highestAfc;
     uint8_t beforeTX;
+/*    
+typedef struct {
+    uint8_t rssi;
+} RF69_Stats;
+
+static RF69_Stats remote;
+static RF69_Stats local;
+*/    
 
 protected:
     enum {
@@ -378,13 +386,13 @@ int RF69<SPI>::receive (void* ptr, int len) {
                 appAverage -= appAverage >> 4;  // Sixteen samples
                 appAverage += afc >> 4;         //
                 
-                if (!(flags & MASTER)) {        
+                if (!(flags & MASTER) && (lna != 1)) {        
                     if (afc < -61) {  // Test range of AFC error
-                        frf = (afc >> 6) + frf--;
+                    /*    frf = (afc >> 6) +*/ frf--;
                         setCalibrate();
                     } else {
                         if (afc > 61) {
-                            frf = (afc >> 6) + frf++;
+                    /*        frf = (afc >> 6) +*/ frf++;
                             setCalibrate();
                         }
                     }                
@@ -436,12 +444,12 @@ void RF69<SPI>::send (uint8_t address, const void* ptr, int len) {
     spi.disable();
 #else
     writeReg(REG_FIFOTHRESH, STOP_TX);  // Wait for FIFO to be filled
-    writeReg(REG_FIFO, len + 6);
-    writeReg(REG_FIFO, address);
-    writeReg(REG_FIFO, myId);
-    writeReg(REG_FIFO, powerValuesTX);
-    writeReg(REG_FIFO, currentThreshold);
-    writeReg(REG_FIFO, rssi);
+    writeReg(REG_FIFO, len + 6);        // +0
+    writeReg(REG_FIFO, address);        // +1
+    writeReg(REG_FIFO, myId);           // +2
+    writeReg(REG_FIFO, powerValuesTX);  // +3
+    writeReg(REG_FIFO, currentThreshold); // +4
+    writeReg(REG_FIFO, rssi);       // +5
     powerValuesRX = ((powerValuesRX & 0xF8) | lna);   
     writeReg(REG_FIFO, powerValuesRX);
     for (int i = 0; i < len; ++i)
