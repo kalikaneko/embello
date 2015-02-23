@@ -83,9 +83,9 @@ int main () {
     for (int i = 0; i < 10000; ++i) __ASM("");
     printf("\n[rf_ping] dev %x node %d\n", devId, nodeId);
 
-    rf.init(nodeId, 42, 869, mySphere);
+    rf.init(nodeId, 42, 86827, mySphere);
 //    rf.encrypt("mysecret");
-    rf.txPower(31); // 0 = min .. 31 = max
+    rf.txPower(8); // 0 = min .. 31 = max
     
     printf("\n[rf_ping] MyID %d, Group %d, Sphere %d\n", 
       rf.myId, rf.myGroup, rf.mySphere);
@@ -98,7 +98,7 @@ int main () {
             const int TXLEN = 16; // can be set to anything from 1 to 65
             static uint8_t txBuf[TXLEN];
             for (int i = 1; i < TXLEN; ++i) txBuf[i] = (i + 0x40);
-            printf(" > %d\n", ++txBuf[0]);
+            printf("%d> %d\n", (rf.powerValuesTX & 0x1F), ++txBuf[0]);
             rf.send(targetAddr, txBuf, sizeof txBuf);
         }
 
@@ -124,7 +124,7 @@ int main () {
                         rf.lowThreshold, rf.currentThreshold, rf.highThreshold, 
                           rf.goodStep, rf.fei, f, rf.lowestAfc, rf.appAverage,
                             rf.highestAfc, rf.beforeTX);
-            rf.txPower((--sweep) & 0x1F); // 0 = min .. 31 = max
+//            rf.txPower((--sweep) & 0x1F); // 0 = min .. 31 = max
         }
 
         chThdYield() 

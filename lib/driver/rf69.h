@@ -223,6 +223,7 @@ void RF69<SPI>::init (uint8_t id, uint8_t group, int freq, uint8_t sphere) {
     highestAfc = -32768;
         
     configure(configRegs);
+    frf = 0;
     setFrequency(freq);
 
     writeReg(REG_SYNCVALUE2, group);
@@ -371,19 +372,19 @@ int RF69<SPI>::receive (void* ptr, int len) {
 
 // Development Debug of frequency tracking
             
-            if (!(flags & (NOISEY)) 
-              && ((afc < 122 && afc > 0) || (afc > -122 && afc < 0))) { 
+            if (!(flags & (NOISEY) && (lna != 1) 
+              && ((afc < 4000 && afc > 0) || (afc > -4000 && afc < 0)))) { 
 
                 appAverage -= appAverage >> 4;  // Sixteen samples
                 appAverage += afc >> 4;         //
                 
                 if (!(flags & MASTER)) {        
-                    if (afc < -61) {  // Test sign of average AFC error
-                        frf--;
+                    if (afc < -61) {  // Test range of AFC error
+                        frf = (afc >> 6) + frf--;
                         setCalibrate();
                     } else {
                         if (afc > 61) {
-                            frf++;
+                            frf = (afc >> 6) + frf++;
                             setCalibrate();
                         }
                     }                

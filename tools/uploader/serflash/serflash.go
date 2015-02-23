@@ -74,7 +74,7 @@ func (c *Conn) readReply() (string, bool) {
 	select {
 	case line := <-c.Lines:
 		return line, true
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		return "", false
 	}
 }
